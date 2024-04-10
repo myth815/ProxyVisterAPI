@@ -13,18 +13,18 @@ namespace ProxyVisterAPI.Controllers.CPWenKu
     public class CategoriesController : ControllerBase
     {
         private readonly ILogger<CategoriesController> Logger;
-        private readonly ICPWenKuCrawerService CPWenKuCrawerServiceInstance;
+        private readonly ICPWenKuModelService CPWenKuModelService;
 
-        public CategoriesController(ILogger<CategoriesController> OutputLogger, ICPWenKuCrawerService CPWenKuCrawerServiceInstance) : base()
+        public CategoriesController(ILogger<CategoriesController> OutputLogger, ICPWenKuModelService CPWenKuModelService) : base()
         {
             this.Logger = OutputLogger;
-            this.CPWenKuCrawerServiceInstance = CPWenKuCrawerServiceInstance;
+            this.CPWenKuModelService = CPWenKuModelService;
         }
 
         [HttpGet]
         public IActionResult Get(bool force = false)
         {
-            List<CategoryModel>? Categories = this.CPWenKuCrawerServiceInstance.GetCategories(force);
+            List<CategoryModel>? Categories = this.CPWenKuModelService.GetCategories(force);
             if (Categories != null)
             {
                 return Ok(Categories);
@@ -38,18 +38,18 @@ namespace ProxyVisterAPI.Controllers.CPWenKu
     public class BookController : ControllerBase
     {
         private readonly ILogger<BookController> Logger;
-        private readonly ICPWenKuCrawerService CPWenKuCrawerServiceInstance;
+        private readonly ICPWenKuModelService CPWenKuModelService;
 
-        public BookController(ILogger<BookController> OutputLogger, ICPWenKuCrawerService CPWenKuCrawerServiceInstance) : base()
+        public BookController(ILogger<BookController> OutputLogger, ICPWenKuModelService CPWenKuModelService) : base()
         {
             this.Logger = OutputLogger;
-            this.CPWenKuCrawerServiceInstance = CPWenKuCrawerServiceInstance;
+            this.CPWenKuModelService = CPWenKuModelService;
         }
 
         [HttpGet("{BookID}")]
         public IActionResult GetBook(int BookID, bool force = false)
         {
-            BookModel? Resutl = this.CPWenKuCrawerServiceInstance.GetBookModel(BookID);
+            BookModel? Resutl = this.CPWenKuModelService.GetBookModel(BookID);
             if (Resutl != null)
             {
                 return Ok(Resutl);

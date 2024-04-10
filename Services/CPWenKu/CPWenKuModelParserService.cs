@@ -14,10 +14,10 @@ namespace ProxyVisterAPI.Services.CPWenKu
         PageModel ParsePageModel(HtmlDocument ChapterHtmlDocument);
     }
 
-    public class CPWenKuModelParserService : ICPWenKuModelParseService
+    public class CPWenKuModelParseService : ICPWenKuModelParseService
     {
-        Logger<CPWenKuModelParserService> Logger;
-        public CPWenKuModelParserService(Logger<CPWenKuModelParserService> ServiceLogger)
+        Logger<CPWenKuModelParseService> Logger;
+        public CPWenKuModelParseService(Logger<CPWenKuModelParseService> ServiceLogger)
         {
             this.Logger = ServiceLogger;
         }

@@ -6,7 +6,7 @@ using System.Globalization;
 
 namespace ProxyVisterAPI.Services.CPWenKu
 {
-    public interface ICPWenKuCrawerService
+    public interface ICPWenKuModelService
     {
         bool TryGetBookOrAddBookToCrawerQueue(BookModel book, bool force = false);
         List<CategoryModel> GetCategories(bool force = false);
@@ -15,9 +15,9 @@ namespace ProxyVisterAPI.Services.CPWenKu
         BookModel? GetBookModel(int BookID);
     }
 
-    public class CPWenKuContentService : ICPWenKuCrawerService
+    public class CPWenKuModelService : ICPWenKuModelService
     {
-        private Logger<JsonLocalStorageService> Logger;
+        private Logger<CPWenKuModelService> Logger;
         private ICrawerService CrawerService;
 
         private readonly string StorageDirectory = Directory.GetCurrentDirectory();
@@ -25,7 +25,10 @@ namespace ProxyVisterAPI.Services.CPWenKu
         private readonly string CategoriesLocalPath = "/cpwenku/Categories.json";
         private ConcurrentQueue<BookModel> BookCrawerList = new ConcurrentQueue<BookModel>();
 
-        public CPWenKuContentService(Logger<JsonLocalStorageService> ServiceLogger, ICrawerService CrawerService)
+        private int CurrentTaskBookID;
+        private Task? CurrentTask;
+
+        public CPWenKuModelService(Logger<CPWenKuModelService> ServiceLogger, ICrawerService CrawerService)
         {
             this.Logger = ServiceLogger;
             this.CrawerService = CrawerService;
@@ -152,7 +155,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
                 Finished = BoolTag.SelectSingleNode("//span[@class='red']").InnerText == "已完结",
                 Introduction = BookInfo.SelectSingleNode("//p[@class='bookintro']").InnerText,
                 UpdateTime = DateTime.ParseExact(WebContent.DocumentNode.SelectSingleNode("//p[@class='booktime']").InnerText.Replace("更新时间：", ""), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-                ChapterPageList = ChapterPageList,
+                ChapterList = ChapterPageList,
                 Link = RequestURL,
             };
             //将BookModel存入本地
@@ -196,26 +199,29 @@ namespace ProxyVisterAPI.Services.CPWenKu
             await Task.Delay(TimeSpan.FromSeconds(1)); // 假设的异步操作
             List<string> Result = new List<string>();
 
-            for (int i = 0; i < BookModelInstance.ChapterPageList.Count; i++)
+            if(BookModelInstance.ChapterList != null)
             {
-                string RequestURL = $"https://www.cpwenku.com/go/{BookModelInstance.ID}/{BookModelInstance.ChapterPageList[i]}";
-                HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
-                HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
-                if (ContentNode != null)
+                for (int i = 0; i < BookModelInstance.ChapterList.Count; i++)
                 {
-                    ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                    ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                    ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                    ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                    Result.Add(ContentNode.InnerText);
-                    this.Logger.LogInformation($"{BookModelInstance.ID} Processed {i + 1} / {BookModelInstance.ChapterPageList.Count}");
+                    string RequestURL = $"https://www.cpwenku.com/go/{BookModelInstance.ID}/{BookModelInstance.ChapterList[i]}";
+                    HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
+                    HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
+                    if (ContentNode != null)
+                    {
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                        Result.Add(ContentNode.InnerText);
+                        this.Logger.LogInformation($"{BookModelInstance.ID} Processed {i + 1} / {BookModelInstance.ChapterList.Count}");
+                    }
                 }
+                BookModelInstance.ChapterList = Result;
+                string SerializedBookModel = JsonConvert.SerializeObject(BookModelInstance);
+                string LocalBookPath = this.StorageDirectory + $"/cpwenku/Books/{BookModelInstance.ID}.json";
+                System.IO.File.WriteAllText(LocalBookPath, SerializedBookModel);
+                this.Logger.LogInformation($"Finish Processed {BookModelInstance.ID}");
             }
-            BookModelInstance.ChapterPageContentList = Result;
-            string SerializedBookModel = JsonConvert.SerializeObject(BookModelInstance);
-            string LocalBookPath = this.StorageDirectory + $"/cpwenku/Books/{BookModelInstance.ID}.json";
-            System.IO.File.WriteAllText(LocalBookPath, SerializedBookModel);
-            this.Logger.LogInformation($"Finish Processed {BookModelInstance.ID}");
         }
 
         private void FlushBookToCrawerList()
@@ -238,6 +244,37 @@ namespace ProxyVisterAPI.Services.CPWenKu
                     })
                     ;
                 }
+            }
+        }
+
+        private async Task ProcessBookDetail(BookModel BookDetailInstance)
+        {
+            // 实现你的异步逻辑
+            await Task.Delay(TimeSpan.FromSeconds(1)); // 假设的异步操作
+            List<string> Result = new List<string>();
+
+            if(BookDetailInstance.ChapterList != null)
+            {
+                for (int i = 0; i < BookDetailInstance.ChapterList.Count; i++)
+                {
+                    string RequestURL = $"https://www.cpwenku.com/go/{BookDetailInstance.ID}/{BookDetailInstance.ChapterList[i]}";
+                    HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
+                    HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
+                    if (ContentNode != null)
+                    {
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                        Result.Add(ContentNode.InnerText);
+                        this.Logger.LogInformation($"{BookDetailInstance.ID} Processed {i + 1} / {BookDetailInstance.ChapterList.Count}");
+                    }
+                }
+                BookDetailInstance.ChapterList = Result;
+                string SerializedBookDetail = JsonConvert.SerializeObject(BookDetailInstance);
+                string LocalBookPath = this.StorageDirectory + $"/cpwenku/Books/{BookDetailInstance.ID}.json";
+                System.IO.File.WriteAllText(LocalBookPath, SerializedBookDetail);
+                this.Logger.LogInformation($"Finish Processed {BookDetailInstance.ID}");
             }
         }
     }
