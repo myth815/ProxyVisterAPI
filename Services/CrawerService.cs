@@ -119,6 +119,8 @@ namespace ProxyVisterAPI.Services
             while (true)
             {
                 HttpClient client = GetHttpClientWithProxy();
+                Task<HttpResponseMessage> task = client.GetAsync(RequestURL);
+                
                 HttpResponseMessage Response = await client.GetAsync(RequestURL);
                 if (Response.StatusCode == HttpStatusCode.OK)
                 {

@@ -2,14 +2,13 @@ using ProxyVisterAPI.Services;
 using ProxyVisterAPI.Services.CPWenKu;
 using System.Text;
 
-System.Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:7890");
+System.Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:10801");
 
 
 // 在应用启动时调用
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
-//builder.Services.AddHostedService<CPWenKuBackGroundCrawerService>();
 
 builder.Services.AddSingleton<ICrawerService, CrawerService>();
 builder.Services.AddSingleton<IJsonLocalStorageService, JsonLocalStorageService>();

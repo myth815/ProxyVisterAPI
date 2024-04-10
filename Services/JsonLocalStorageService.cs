@@ -10,8 +10,8 @@ namespace ProxyVisterAPI.Services
     }
     public class JsonLocalStorageService : IJsonLocalStorageService
     {
-        private Logger<JsonLocalStorageService> Logger;
-        public JsonLocalStorageService(Logger<JsonLocalStorageService> ServiceLogger)
+        private ILogger<JsonLocalStorageService> Logger;
+        public JsonLocalStorageService(ILogger<JsonLocalStorageService> ServiceLogger)
         {
             Logger = ServiceLogger;
         }

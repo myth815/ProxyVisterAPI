@@ -1,9 +1,17 @@
-﻿using Newtonsoft.Json;
+﻿using HtmlAgilityPack;
+using Newtonsoft.Json;
 using ProxyVisterAPI.Services;
 using System.Net;
 
 namespace ProxyVisterAPI.Models.CPWenku
 {
+    public class DataModel
+    {
+        public T? ParseModel<T>(HtmlDocument HTMLContent)
+        {
+            return default;
+        }
+    }
     public class BookModel
     {
         public int ID { get; set; }
@@ -16,30 +24,6 @@ namespace ProxyVisterAPI.Models.CPWenku
         public string? Introduction { get; set; }
         public DateTime UpdateTime { get; set; }
         public List<string>? ChapterList { get; set; }
-        public List<PageModel>? PageList { get; set; }
-        public List<string>? ContentLines { get; set; }
-        public List<string>? Content { get; set; }
-        public string? Link { get; set; }
-        public DateTime? CrawlTime { get; set; }
-
-        public void OverloadBookModel(BookModel Self)
-        {
-            this.ID = Self.ID;
-            this.CoverPath = Self.CoverPath;
-            this.NoCoverPath = Self.NoCoverPath;
-            this.Title = Self.Title;
-            this.Author = Self.Author;
-            this.WordsCount = Self.WordsCount;
-            this.Finished = Self.Finished;
-            this.Introduction = Self.Introduction;
-            this.UpdateTime = Self.UpdateTime;
-            this.ChapterList = Self.ChapterList;
-            this.PageList = Self.PageList;
-            this.ContentLines = Self.ContentLines;
-            this.Content = Self.Content;
-            this.Link = Self.Link;
-            this.CrawlTime = Self.CrawlTime;
-        }
     }
 
     public class PageModel
@@ -50,6 +34,13 @@ namespace ProxyVisterAPI.Models.CPWenku
         public List<string>? ContentLines { get; set; }
         public string? PrivousPageLink { get; set; }
         public string? NextPageLink { get; set; }
+        public bool IsEndOfBook { get; set; }
+    }
+
+    public class BookContentModel
+    {
+        public BookModel? BookModel { get; set; }
+        public List<PageModel>? PageModels { get; set; }
     }
 
     public class CategoryModel
