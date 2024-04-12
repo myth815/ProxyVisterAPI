@@ -59,6 +59,7 @@ namespace ProxyVisterAPI.Services
         protected uint TimeOut;
 
         protected ConcurrentQueue<AsyncWebFetchTaskBase> CrawerTaskList;
+        protected ConcurrentStack<HttpClient> HttpClientPool;
         public DomainCrawerManager(ILogger<CrawerService> Logger, IModelParserService ModelParserService, string DomainName, IConfigurationSection Configuration)
         {
             this.Logger = Logger;
@@ -72,6 +73,7 @@ namespace ProxyVisterAPI.Services
             this.TimeOut = this.Configuration.GetValue<uint>("TimeOut");
             this.SetupProxy();
             this.CrawerTaskList = new ConcurrentQueue<AsyncWebFetchTaskBase>();
+            this.HttpClientPool = new ConcurrentStack<HttpClient>();
         }
 
         public void AsyncGetWebContent<T>(Uri UriRequest, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
@@ -119,18 +121,42 @@ namespace ProxyVisterAPI.Services
             {
                 for (int i = 0; i < this.NumberOfThreads; i++)
                 {
-                    if (this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task))
+                    if (this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task) && this.HttpClientPool.TryPop(out HttpClient? Client))
                     {
-                        Task.Result = this.FetchWebContent<HtmlDocument>(Task.URL);
-                        Type Tasktype = typeof(Task);
-                        if(Task != null && Tasktype != null)
+                        Task<HttpResponseMessage> TaskResponse = Client.GetAsync(Task.URL);
+                        TaskResponse.ContinueWith(TaskResponse =>
                         {
-                            MethodInfo? CallbackMethod = Tasktype.GetMethod("TaskCallback");
-                            if(CallbackMethod != null)
+                            HttpResponseMessage Response = TaskResponse.Result;
+                            switch (Response.StatusCode)
                             {
-                                CallbackMethod.Invoke(Task, [Task]);
+                                case HttpStatusCode.OK:
+                                    {
+                                        HtmlDocument WebContent = new HtmlDocument();
+                                        Task<string> TaskResponseContent = Response.Content.ReadAsStringAsync();
+                                        TaskResponseContent.ContinueWith(TaskResponseContent =>
+                                        {
+                                            WebContent.LoadHtml(TaskResponseContent.Result);
+                                            Task.Result = WebContent;
+                                            Task.StringResult = TaskResponseContent.Result;
+                                            Task.HtmlResult = WebContent;
+                                            Type ReturnType = typeof(Task).GetGenericTypeDefinition();
+                                            this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
+                                        },
+                                        TaskContinuationOptions.OnlyOnRanToCompletion);
+                                        break;
+                                    }
+                                default:
+                                    {
+                                        Task.RryCount++;
+                                        if (Task.RryCount < MaxTryCount)
+                                        {
+                                            this.CrawerTaskList.Enqueue(Task);
+                                        }
+                                        break;
+                                    }
                             }
-                        }
+                        },
+                        TaskContinuationOptions.OnlyOnRanToCompletion);
                     }
                 }
             }
