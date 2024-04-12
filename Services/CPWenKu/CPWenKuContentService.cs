@@ -2,6 +2,7 @@
 using Newtonsoft.Json;
 using ProxyVisterAPI.Models.CPWenku;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 
 namespace ProxyVisterAPI.Services.CPWenKu
@@ -16,11 +17,11 @@ namespace ProxyVisterAPI.Services.CPWenKu
 
     public interface ICPWenKuModelService
     {
-        List<CategoryModel> GetCategories(bool Force = false);
-        List<BookModel> GetBookListFromCategory(string Category, bool Force = false);
-        List<BookModel> GetBookListFromAuthor(string Author);
-        BookModel GetBookModel(int BookID);
-        BookContentModel GetBookContentModel(int BookID);
+        List<CategoryModel>? GetCategories(bool Force = false);
+        List<BookModel>? GetBookListFromCategory(string Category, bool Force = false);
+        List<BookModel>? GetBookListFromAuthor(string Author);
+        BookModel? GetBookModel(int BookID);
+        BookContentModel? GetBookContentModel(int BookID);
         bool IsBookModelEqual(BookModel Left, BookModel Right);
         bool IsBookModelUpdateTimeEqual(BookModel Left, BookModel Right, bool CheckUpdateTime);
         bool IsBookModelCollectionEqual(List<BookModel> Left, List<BookModel> Right);
@@ -48,14 +49,13 @@ namespace ProxyVisterAPI.Services.CPWenKu
             this.LocalStrorageService = localStrorageService;
         }
 
-        public List<CategoryModel> GetCategories(bool Force = false)
+        public List<CategoryModel>? GetCategories(bool Force = false)
         {
             List<CategoryModel>? LocalResult = this.LocalStrorageService.LoadCategoryModelFromLocalStrorage();
             if(LocalResult == null || Force)
             {
-                HtmlDocument WebContent = this.CrawerService.GetWebContent(CPWenKuRequestDefine.CategoriesURL).Result;
-                List<CategoryModel> RemoteResult = ModelParseService.ParseCategoryModel(WebContent);
-                if (LocalResult == null || (LocalResult != null && !this.IsCategoryModelCollectionEqual(LocalResult, RemoteResult)))
+                List<CategoryModel>? RemoteResult = this.CrawerService.FetchWebContent<List<CategoryModel>>(CPWenKuRequestDefine.CategoriesURL);
+                if (RemoteResult != null && (LocalResult == null || (LocalResult != null && !this.IsCategoryModelCollectionEqual(LocalResult, RemoteResult))))
                 {
                     this.LocalStrorageService.SaveCategoryModelToLocalStrorage(RemoteResult);
                 }
@@ -64,14 +64,13 @@ namespace ProxyVisterAPI.Services.CPWenKu
             return LocalResult;
         }
 
-        public List<BookModel> GetBookListFromCategory(string Category, bool Force = false)
+        public List<BookModel>? GetBookListFromCategory(string Category, bool Force = false)
         {
             List<BookModel>? LocalResult = this.LocalStrorageService.LoadBookListWithCategoryFromLocal(Category);
             if (LocalResult == null || Force)
             {
-                HtmlDocument WebContent = this.CrawerService.GetWebContent(CPWenKuRequestDefine.CategoriesURL).Result;
-                List<BookModel> RemoteResult = ModelParseService.ParseBookModelCollection(WebContent);
-                if(LocalResult == null || (LocalResult != null && !this.IsBookModelCollectionEqual(LocalResult, RemoteResult)))
+                List<BookModel>? RemoteResult = this.CrawerService.FetchWebContent<List<BookModel>>(CPWenKuRequestDefine.CategoriesURL);
+                if (RemoteResult != null &&  (LocalResult == null || (LocalResult != null && !this.IsBookModelCollectionEqual(LocalResult, RemoteResult))))
                 {
                     this.LocalStrorageService.SaveBookListWithCategoryToLocal(RemoteResult, Category);
                 }
@@ -80,20 +79,19 @@ namespace ProxyVisterAPI.Services.CPWenKu
             return LocalResult;
         }
 
-        public List<BookModel> GetBookListFromAuthor(string Author)
+        public List<BookModel>? GetBookListFromAuthor(string Author)
         {
             var RequestURL = $"{CPWenKuRequestDefine.GetBooksWithauthorURL}{Author}";
-            HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
-            List<BookModel> RemoteResult = this.ModelParseService.ParseBookModelCollection(WebContent);
+            List<BookModel>? RemoteResult = this.CrawerService.FetchWebContent<List<BookModel>>(RequestURL);
             return RemoteResult;
         }
 
-        public BookModel GetBookModel(int BookID)
+        public BookModel? GetBookModel(int BookID)
         {
             BookModel? LocalResult = this.LocalStrorageService.LoadBookModelFromLocalStrorage(BookID);
             string RequestURL = $"{CPWenKuRequestDefine.GetBookWithIDURL}{BookID}/";
-            HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
-            if (LocalResult != null)
+            HtmlDocument? WebContent = this.CrawerService.FetchWebContent<HtmlDocument>(RequestURL);
+            if (LocalResult != null && WebContent != null)
             {
                 DateTime RemoteUpdateTime = DateTime.ParseExact(WebContent.DocumentNode.SelectSingleNode("//p[@class='booktime']").InnerText.Replace("更新时间：", ""), "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
                 if (RemoteUpdateTime == LocalResult.UpdateTime)
@@ -101,16 +99,20 @@ namespace ProxyVisterAPI.Services.CPWenKu
                     return LocalResult;
                 }
             }
-            BookModel ResultBookModel = this.ModelParseService.ParseBookModel(WebContent, BookID);
-            this.LocalStrorageService.SaveBookModelToLocalStrorage(ResultBookModel);
-            return ResultBookModel;
+            if(WebContent != null)
+            {
+                BookModel ResultBookModel = this.ModelParseService.ParseBookModel(WebContent, BookID);
+                this.LocalStrorageService.SaveBookModelToLocalStrorage(ResultBookModel);
+                return ResultBookModel;
+            }
+            return null;
         }
 
-        public BookContentModel GetBookContentModel(int BookID)
+        public BookContentModel? GetBookContentModel(int BookID)
         {
-            BookModel DestBookModel = this.GetBookModel(BookID);
+            BookModel? DestBookModel = this.GetBookModel(BookID);
             BookContentModel? LocalResult = this.LocalStrorageService.LoadBookContentModelFromLocalStrorage(BookID);
-            if(LocalResult != null && LocalResult.BookModel != null)
+            if(LocalResult != null && LocalResult.BookModel != null && DestBookModel != null)
             {
                 if (LocalResult != null)
                 {
@@ -122,18 +124,20 @@ namespace ProxyVisterAPI.Services.CPWenKu
             }
             BookContentModel ResultBookContentModel = new BookContentModel();
             string BookModelRequestURL = $"{CPWenKuRequestDefine.GetBookWithIDURL}{BookID}/";
-            if (DestBookModel.ChapterList != null)
+            if (DestBookModel != null && DestBookModel.ChapterList != null)
             {
                 Dictionary<string, PageModel> CarwWebList = new Dictionary<string, PageModel>();
                 foreach (string PageLink in DestBookModel.ChapterList)
                 {
                     string RequestPageURL = $"{BookModelRequestURL}{PageLink}";
-                    HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestPageURL).Result;
-                    PageModel BookPageModel = this.ModelParseService.ParsePageModel(WebContent);
-                    CarwWebList.Add(RequestPageURL, BookPageModel);
-                    if(!string.IsNullOrEmpty(BookPageModel.NextPageLink) && BookPageModel.NextPageLink != BookModelRequestURL && !CarwWebList.ContainsKey(BookPageModel.NextPageLink))
+                    PageModel? BookPageModel = this.CrawerService.FetchWebContent<PageModel>(RequestPageURL);
+                    if(BookPageModel != null)
                     {
-                        CarwWebList.Add(PageLink, BookPageModel);
+                        CarwWebList.Add(RequestPageURL, BookPageModel);
+                        if(!string.IsNullOrEmpty(BookPageModel.NextPageLink) && BookPageModel.NextPageLink != BookModelRequestURL && !CarwWebList.ContainsKey(BookPageModel.NextPageLink))
+                        {
+                            CarwWebList.Add(PageLink, BookPageModel);
+                        }
                     }
                 }
             }
@@ -180,16 +184,19 @@ namespace ProxyVisterAPI.Services.CPWenKu
                 for (int i = 0; i < BookModelInstance.ChapterList.Count; i++)
                 {
                     string RequestURL = $"https://www.cpwenku.net/go/{BookModelInstance.ID}/{BookModelInstance.ChapterList[i]}";
-                    HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
-                    HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
-                    if (ContentNode != null)
+                    HtmlDocument? WebContent = this.CrawerService.FetchWebContent< HtmlDocument>(RequestURL);
+                    if (WebContent != null)
                     {
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                        Result.Add(ContentNode.InnerText);
-                        this.Logger.LogInformation($"{BookModelInstance.ID} Processed {i + 1} / {BookModelInstance.ChapterList.Count}");
+                        HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
+                        if(ContentNode != null)
+                        {
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                            Result.Add(ContentNode.InnerText);
+                            this.Logger.LogInformation($"{BookModelInstance.ID} Processed {i + 1} / {BookModelInstance.ChapterList.Count}");
+                        }
                     }
                 }
                 BookModelInstance.ChapterList = Result;
@@ -234,16 +241,19 @@ namespace ProxyVisterAPI.Services.CPWenKu
                 for (int i = 0; i < BookDetailInstance.ChapterList.Count; i++)
                 {
                     string RequestURL = $"https://www.cpwenku.net/go/{BookDetailInstance.ID}/{BookDetailInstance.ChapterList[i]}";
-                    HtmlDocument WebContent = this.CrawerService.GetWebContent(RequestURL).Result;
-                    HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
-                    if (ContentNode != null)
+                    HtmlDocument? WebContent = this.CrawerService.FetchWebContent<HtmlDocument>(RequestURL);
+                    if(WebContent != null)
                     {
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                        ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                        Result.Add(ContentNode.InnerText);
-                        this.Logger.LogInformation($"{BookDetailInstance.ID} Processed {i + 1} / {BookDetailInstance.ChapterList.Count}");
+                        HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
+                        if (ContentNode != null)
+                        {
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
+                            Result.Add(ContentNode.InnerText);
+                            this.Logger.LogInformation($"{BookDetailInstance.ID} Processed {i + 1} / {BookDetailInstance.ChapterList.Count}");
+                        }
                     }
                 }
                 BookDetailInstance.ChapterList = Result;

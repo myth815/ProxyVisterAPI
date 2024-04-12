@@ -1,14 +1,11 @@
 ﻿using HtmlAgilityPack;
-using Newtonsoft.Json;
 using ProxyVisterAPI.Models.CPWenku;
 using System.Globalization;
-using System.Net;
-using System.Xml.Linq;
 using System.Text.RegularExpressions;
 
 namespace ProxyVisterAPI.Services.CPWenKu
 {
-    public interface ICPWenKuModelParseService
+    public interface ICPWenKuModelParseService : IModelParserService
     {
         List<CategoryModel> ParseCategoryModel(HtmlDocument CategoryHtmlDocument);
         List<BookModel> ParseBookModelCollection(HtmlDocument ChapterHtmlDocument);
@@ -16,12 +13,10 @@ namespace ProxyVisterAPI.Services.CPWenKu
         PageModel ParsePageModel(HtmlDocument ChapterHtmlDocument);
     }
 
-    public class CPWenKuModelParseService : ICPWenKuModelParseService
+    public class CPWenKuModelParseService : ModelParserService, ICPWenKuModelParseService
     {
-        ILogger<CPWenKuModelParseService> Logger;
-        public CPWenKuModelParseService(ILogger<CPWenKuModelParseService> ServiceLogger)
+        public CPWenKuModelParseService(ILogger<ModelParserService> Logger):base(Logger)
         {
-            this.Logger = ServiceLogger;
         }
 
         public List<CategoryModel> ParseCategoryModel(HtmlDocument CategoryHtmlDocument)
@@ -85,7 +80,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
             };
             return ResultBookDetail;
         }
-
+        
         public PageModel ParsePageModel(HtmlDocument ChapterHtmlDocument)
         {
             HtmlNode BookReadInfo = ChapterHtmlDocument.DocumentNode.SelectSingleNode("//div[@class='book read']");

@@ -2,8 +2,6 @@ using ProxyVisterAPI.Services;
 using ProxyVisterAPI.Services.CPWenKu;
 using System.Text;
 
-System.Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:10801");
-
 
 // 在应用启动时调用
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);

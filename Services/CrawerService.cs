@@ -1,108 +1,142 @@
 ﻿using HtmlAgilityPack;
+using Microsoft.AspNetCore.Mvc;
 using ProxyVisterAPI.Controllers;
 using ProxyVisterAPI.Models.CPWenku;
+using ProxyVisterAPI.Services.CPWenKu;
 using System.Collections.Concurrent;
 using System.Net;
+using System.Reflection;
 using System.Text.RegularExpressions;
+using static ProxyVisterAPI.Services.DomainCrawerManager;
 
 namespace ProxyVisterAPI.Services
 {
     public interface ICrawerService
     {
-        Task<HtmlDocument> GetWebContent(string RequestURL);
+        T? FetchWebContent<T>(string url);
+        void AsyncFetchWebContent<T>(string RequestURL, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback);
     }
 
-    public class CrawerService : ICrawerService
+    public class AsyncWebFetchTaskBase
     {
-        public int VistIntervals = 1;
-        private IHttpClientFactory? _httpClientFactory;
-        private WebProxy? WebProxySettings;
-        private readonly ILogger<CrawerService> Logger;
-        private Task? CurrentTask;
-        private int CurrentTaskBookID;
-        private ConcurrentQueue<string> CrawerTaskList;
+        public Uri URL { get; set; }
+        public string? StringResult { get; set; }
+        public HtmlDocument? HtmlResult { get; set; }
+        public object? Result { get; set; }
+        public uint RryCount { get; set; }
+        public Exception? exception { get; set; }
 
-        public CrawerService(ILogger<CrawerService> Logger)
+        public AsyncWebFetchTaskBase(Uri UriRequest)
+        {
+            this.URL = UriRequest;
+        }
+    }
+
+    public class AsyncWebFetchTask<T> : AsyncWebFetchTaskBase
+    {
+        public delegate void TaskCompletedCallback(AsyncWebFetchTask<T> result);
+        public delegate ModelType ParseModel<ModelType>(HtmlDocument HTMLContent);
+        
+        public TaskCompletedCallback TaskCallback { get; set; }
+
+        public AsyncWebFetchTask(Uri UriRequest, TaskCompletedCallback TaskCallback):base(UriRequest)
+        {
+            this.TaskCallback = TaskCallback;
+        }
+    }
+
+    public class DomainCrawerManager
+    {
+        protected ILogger<CrawerService> Logger;
+        protected IConfigurationSection Configuration;
+        IModelParserService ModelParserService;
+        protected string DomainName;
+        protected WebProxy? WebProxySettings;
+        protected int VistIntervals;
+        protected uint MaxConnectPool;
+        protected uint NumberOfThreads;
+        protected uint MaxTryCount;
+        protected uint TimeOut;
+
+        protected ConcurrentQueue<AsyncWebFetchTaskBase> CrawerTaskList;
+        public DomainCrawerManager(ILogger<CrawerService> Logger, IModelParserService ModelParserService, string DomainName, IConfigurationSection Configuration)
         {
             this.Logger = Logger;
-            this.CrawerTaskList = new ConcurrentQueue<string>();
-            SetupProxy();
+            this.ModelParserService = ModelParserService;
+            this.DomainName = DomainName;
+            this.Configuration = Configuration;
+            this.VistIntervals = this.Configuration.GetValue<int>("VistIntervals");
+            this.MaxConnectPool = this.Configuration.GetValue<uint>("MaxConnectPool");
+            this.NumberOfThreads = this.Configuration.GetValue<uint>("NumberOfThreads");
+            this.MaxTryCount = this.Configuration.GetValue<uint>("MaxTryCount");
+            this.TimeOut = this.Configuration.GetValue<uint>("TimeOut");
+            this.SetupProxy();
+            this.CrawerTaskList = new ConcurrentQueue<AsyncWebFetchTaskBase>();
         }
-        private void SetupProxy()
+
+        public void AsyncGetWebContent<T>(Uri UriRequest, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
         {
-            string? ProxyVistIntervals = Environment.GetEnvironmentVariable("ProxyVistIntervals");
-            if (!string.IsNullOrEmpty(ProxyVistIntervals))
+            AsyncWebFetchTask<T> Task = new AsyncWebFetchTask<T>(UriRequest, FinishCallback);
+            this.CrawerTaskList.Enqueue(Task);
+            this.FlushTaskQueue();
+        }
+
+        public T? FetchWebContent<T>(Uri UriRequest)
+        {
+            while (true)
             {
-                VistIntervals = int.Parse(ProxyVistIntervals);
-                if (VistIntervals <= 0)
+                HttpClient WebClient = GetHttpClientWithProxy();
+                HttpResponseMessage Response = WebClient.GetAsync(UriRequest).GetAwaiter().GetResult();
+                switch (Response.StatusCode)
                 {
-                    this.Logger.LogInformation("ProxyVistIntervals Is Set Wrong Value( " + ProxyVistIntervals + " ), Please check. Now is 1 Default)");
-                    VistIntervals = 1;
-                }
-            }
-            else
-            {
-                this.Logger.LogInformation("ProxyVistIntervals Is Not Set, Please check. Now is 1 Default)");
-                VistIntervals = 1;
-            }
-            string? HttpProxyURL = Environment.GetEnvironmentVariable("HTTP_PROXY");
-            string? HttpsProxyURL = Environment.GetEnvironmentVariable("HTTPS_PROXY");
-            string pattern = @"^(https?)://(([^:@]+):([^:@]+)@)?([^:/]+)(:([0-9]+))?$";
-            if (string.IsNullOrEmpty(HttpProxyURL) && string.IsNullOrEmpty(HttpsProxyURL))
-            {
-                this.Logger.LogInformation("Disable Proxy.)");
-            }
-            else if (!string.IsNullOrEmpty(HttpsProxyURL))
-            {
-                Match match = Regex.Match(HttpsProxyURL, pattern);
-                if (match.Success)
-                {
-                    string protocol = match.Groups[1].Value;
-                    string username = match.Groups[3].Value;
-                    string password = match.Groups[4].Value;
-                    string ipOrDomain = match.Groups[5].Value;
-                    int port = int.Parse(match.Groups[7].Value);
-                    if (protocol == "https" && port > 0)
-                    {
-                        this.WebProxySettings = new WebProxy(protocol + "://" + ipOrDomain + ":" + port);
-                        if (!string.IsNullOrEmpty(username))
+                    case HttpStatusCode.OK:
                         {
-                            this.WebProxySettings.Credentials = new NetworkCredential(username, password);
+                            HtmlDocument WebContent = new HtmlDocument();
+                            string ResponseContent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                            WebContent.LoadHtml(ResponseContent);
+                            if(typeof(T) == typeof(HtmlDocument))
+                            {
+                                T Result = (T)Convert.ChangeType(WebContent, typeof(T));
+                                return Result;
+                            }
+                            else
+                            {
+                                return this.ModelParserService.ParseModel<T>(WebContent);
+                            }
                         }
-                    }
-                    else
-                    {
-                        this.Logger.LogInformation("Failed Enable Proxy With URL( " + HttpsProxyURL + " ), Please check.)");
-                    }
-                }
-            }
-            else if (!string.IsNullOrEmpty(HttpProxyURL))
-            {
-                Match match = Regex.Match(HttpProxyURL, pattern);
-                if (match.Success)
-                {
-                    string protocol = match.Groups[1].Value;
-                    string username = match.Groups[3].Value;
-                    string password = match.Groups[4].Value;
-                    string ipOrDomain = match.Groups[5].Value;
-                    int port = int.Parse(match.Groups[7].Value);
-                    if (protocol == "http" && port > 0)
-                    {
-                        this.WebProxySettings = new WebProxy(protocol + "://" + ipOrDomain + ":" + port);
-                        if (!string.IsNullOrEmpty(username))
+                    default:
                         {
-                            this.WebProxySettings.Credentials = new NetworkCredential(username, password);
+                            Thread.Sleep(VistIntervals);
+                            continue;
                         }
-                    }
-                }
-                else
-                {
-                    this.Logger.LogInformation("Failed Enable Proxy With URL( " + HttpsProxyURL + " ), Please check.)");
                 }
             }
         }
 
-        private HttpClient GetHttpClientWithProxy()
+        protected void FlushTaskQueue()
+        {
+            if (this.CrawerTaskList.Count > 0)
+            {
+                for (int i = 0; i < this.NumberOfThreads; i++)
+                {
+                    if (this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task))
+                    {
+                        Task.Result = this.FetchWebContent<HtmlDocument>(Task.URL);
+                        Type Tasktype = typeof(Task);
+                        if(Task != null && Tasktype != null)
+                        {
+                            MethodInfo? CallbackMethod = Tasktype.GetMethod("TaskCallback");
+                            if(CallbackMethod != null)
+                            {
+                                CallbackMethod.Invoke(Task, [Task]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        protected HttpClient GetHttpClientWithProxy()
         {
             HttpClientHandler httpClientHandler = new HttpClientHandler
             {
@@ -114,26 +148,84 @@ namespace ProxyVisterAPI.Services
             return new HttpClient(httpClientHandler);
         }
 
-        public async Task<HtmlDocument> GetWebContent(string RequestURL)
+        protected void SetupProxy()
         {
-            while (true)
+            IConfigurationSection ProxySection = this.Configuration.GetSection("Proxy");
+            if (ProxySection.Exists())
             {
-                HttpClient client = GetHttpClientWithProxy();
-                Task<HttpResponseMessage> task = client.GetAsync(RequestURL);
-                
-                HttpResponseMessage Response = await client.GetAsync(RequestURL);
-                if (Response.StatusCode == HttpStatusCode.OK)
+                string? ProxyProtol = ProxySection.GetValue<string>("Protol");
+                string? ProxyHost = ProxySection.GetValue<string>("Host");
+                uint? ProxyPort = ProxySection.GetValue<uint>("Port");
+                if (string.IsNullOrEmpty(ProxyProtol) || string.IsNullOrEmpty(ProxyHost))
                 {
-                    HtmlDocument WebContent = new HtmlDocument();
-                    WebContent.LoadHtml(await Response.Content.ReadAsStringAsync());
-                    return WebContent;
+                    this.Logger.LogError("ProxyProtol or ProxyHost Proxy Configure Is Not Set, Please check.)");
                 }
-                else
+                if (ProxyPort == 0)
                 {
-                    Thread.Sleep(VistIntervals);
-                    continue;
+                    this.Logger.LogError("ProxyPort Proxy Configure Is 0, Please check.)");
+                }
+                string ProxyUri = $"{ProxyProtol}://{ProxyHost}:{ProxyPort}";
+                this.WebProxySettings = new WebProxy($"{ProxyProtol}://{ProxyHost}:{ProxyPort}");
+                string? ProxyUserName = ProxySection.GetValue<string>("UserName");
+                string? ProxyPassword = ProxySection.GetValue<string>("Password");
+                if (!string.IsNullOrEmpty(ProxyUserName))
+                {
+                    this.WebProxySettings.Credentials = new NetworkCredential(ProxyUserName, ProxyPassword);
                 }
             }
+        }
+    }
+
+    public class CrawerService : ICrawerService
+    {
+        private readonly ILogger<CrawerService> Logger;
+        private readonly IConfigurationSection Configure;
+        private readonly IModelParserService ModelParserService;
+        private Dictionary<string, DomainCrawerManager> DomainCrawerManagers;
+        public CrawerService(ILogger<CrawerService> Logger, IConfiguration Configuration, IModelParserService ModelParserService)
+        {
+            this.Logger = Logger;
+            this.DomainCrawerManagers = new Dictionary<string, DomainCrawerManager>();
+            this.Configure = Configuration.GetSection("Services").GetSection("Carwer");
+            this.ModelParserService = ModelParserService;
+        }
+
+        public void AddDomainCrawerManager(string DomainName)
+        {
+            //查找对应配置
+            IConfigurationSection? DomainCrawerConfigure = Configure.GetSection($"DomainCrawers:{DomainName}");
+            DomainCrawerManagers.Add(DomainName, new DomainCrawerManager(Logger, ModelParserService, DomainName, DomainCrawerConfigure));
+        }
+
+        private DomainCrawerManager? GetDomainCrawerManager(Uri UriRequest)
+        {
+            if (!DomainCrawerManagers.ContainsKey(UriRequest.Host))
+            {
+                AddDomainCrawerManager(UriRequest.Host);
+            }
+            return DomainCrawerManagers[UriRequest.Host];
+        }
+
+        public T? FetchWebContent<T>(string RequestURL)
+        {
+            Uri UriRequest = new Uri(RequestURL);
+            DomainCrawerManager? Manager = GetDomainCrawerManager(UriRequest);
+            if (Manager != null)
+            {
+                return Manager.FetchWebContent<T>(UriRequest);
+            }
+            throw new Exception($"Can't Get DomainName From RequestURL( {UriRequest.OriginalString} )");
+        }
+
+        public void AsyncFetchWebContent<T>(string RequestURL, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
+        {
+            Uri UriRequest = new Uri(RequestURL);
+            DomainCrawerManager? Manager = GetDomainCrawerManager(UriRequest);
+            if (Manager != null)
+            {
+                Manager.AsyncGetWebContent(UriRequest, FinishCallback);
+            }
+            throw new Exception("Can't Get DomainName From RequestURL( " + RequestURL + " )");
         }
     }
 }
