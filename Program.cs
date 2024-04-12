@@ -8,11 +8,12 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton<ICPWenKuModelParseService, CPWenKuModelParseService>();
+builder.Services.AddSingleton<IModelParserService, CPWenKuModelParseService>();
 builder.Services.AddSingleton<ICrawerService, CrawerService>();
 builder.Services.AddSingleton<IJsonLocalStorageService, JsonLocalStorageService>();
 builder.Services.AddSingleton<ITextService, TextService>();
 builder.Services.AddSingleton<ICPWenKuLocalStrorageService, CPWenKuLocalStrorageService>();
-builder.Services.AddSingleton<ICPWenKuModelParseService, CPWenKuModelParseService>();
 builder.Services.AddSingleton<ICPWenKuModelService, CPWenKuModelService>();
 
 builder.Services.AddHttpClient();

@@ -5,14 +5,7 @@ using System.Net;
 
 namespace ProxyVisterAPI.Models.CPWenku
 {
-    public class DataModel
-    {
-        public T? ParseModel<T>(HtmlDocument HTMLContent)
-        {
-            return default;
-        }
-    }
-    public class BookModel
+    public class BookModel : ModelBase
     {
         public int ID { get; set; }
         public string? CoverPath { get; set; }
@@ -26,7 +19,7 @@ namespace ProxyVisterAPI.Models.CPWenku
         public List<string>? ChapterList { get; set; }
     }
 
-    public class PageModel
+    public class PageModel : ModelBase
     {
         public uint ChapterNumber { get; set; }
         public uint CurrentPageNumber { get; set; }
@@ -37,13 +30,13 @@ namespace ProxyVisterAPI.Models.CPWenku
         public bool IsEndOfBook { get; set; }
     }
 
-    public class BookContentModel
+    public class BookContentModel : ModelBase
     {
         public BookModel? BookModel { get; set; }
         public List<PageModel>? PageModels { get; set; }
     }
 
-    public class CategoryModel
+    public class CategoryModel : ModelBase
     {
         public string? Name { get; set; }
         public string? Link { get; set; }
