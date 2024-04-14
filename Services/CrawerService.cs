@@ -200,6 +200,7 @@ namespace ProxyVisterAPI.Services
                                     }
                                     this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
                                     this.HttpClientPool.Push(Client);
+                                    Thread.Sleep(this.VistIntervals);
                                     this.FlushTaskQueue();
                                 },
                                 TaskContinuationOptions.OnlyOnRanToCompletion);
