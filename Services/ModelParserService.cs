@@ -1,10 +1,13 @@
 ﻿using HtmlAgilityPack;
+using Microsoft.AspNetCore.Mvc.RazorPages;
+using ProxyVisterAPI.Models.CPWenku;
 using System.Reflection;
 
 namespace ProxyVisterAPI.Services
 {
-    public interface ModelBase
+    public class ModelBase
     {
+        public string? Url { get; set; }
     }
 
     public interface IModelParserService
@@ -30,6 +33,7 @@ namespace ProxyVisterAPI.Services
         public ModelParserService(ILogger<ModelParserService> Logger)
         {
             this.Logger = Logger;
+            
             this.ModelParsers = new Dictionary<Type, MethodInfo>();
             MethodInfo[] Methods = this.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
             foreach (MethodInfo Method in Methods)
@@ -39,16 +43,41 @@ namespace ProxyVisterAPI.Services
                 {
                     Type ReturnType = Method.ReturnType;
                     ParameterInfo[] ParameterInfos = Method.GetParameters();
-                    if (ReturnType.IsInstanceOfType(typeof(ModelBase)) && ParameterInfos.Length == 1 && ParameterInfos[0].ParameterType == typeof(HtmlDocument))
+                    // 要求输入参数必须为HtmlDocument
+                    if(!(ParameterInfos.Length == 1 && ParameterInfos[0].ParameterType == typeof(HtmlDocument)))
                     {
-                        if(this.ModelParsers.ContainsKey(ReturnType))
+                        throw new InvalidOperationException();
+                    }
+                    if (ReturnType.IsGenericType)
+                    {
+                        Type[] GenericArguments = ReturnType.GetGenericArguments();
+                        if (GenericArguments.Length == 1)
                         {
-                            this.Logger.LogError($"ModelParserService: ModelParser for {ReturnType.Name} already exists, skip {Method.Name}");
+                            Type ChildType = GenericArguments[0];
+                            if(!typeof(ModelBase).IsAssignableFrom(ChildType))
+                            {
+                                throw new InvalidOperationException();
+                            }
                         }
                         else
                         {
-                            this.ModelParsers.Add(ReturnType, Method);
+                            throw new InvalidOperationException();
                         }
+                    }
+                    else
+                    {
+                        if(!typeof(ModelBase).IsAssignableFrom(ReturnType))
+                        {
+                            throw new InvalidOperationException();
+                        }
+                    }
+                    if(this.ModelParsers.ContainsKey(ReturnType))
+                    {
+                        this.Logger.LogError($"ModelParserService: ModelParser for {ReturnType.Name} already exists, skip {Method.Name}");
+                    }
+                    else
+                    {
+                        this.ModelParsers.Add(ReturnType, Method);
                     }
                 }
             }

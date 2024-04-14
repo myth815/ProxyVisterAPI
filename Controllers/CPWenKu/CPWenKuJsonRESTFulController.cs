@@ -74,11 +74,11 @@ public class BookContentController : ControllerBase
     [HttpGet("{BookID}")]
     public IActionResult GetBookContent(int BookID)
     {
-        BookContentModel? Resutl = this.CPWenKuModelService.GetBookContentModel(BookID);
-        if (Resutl != null)
+        ResultOfBookContentModel? Resutl = this.CPWenKuModelService.GetBookContentModel(BookID);
+        if (Resutl.SuccessGetModel)
         {
-            return Ok(Resutl);
+            return Ok(Resutl.BookContentModel);
         }
-        return Forbid();
+        return Ok($"In Crawe With Process {Resutl.CraweProgress}");
     }
 }

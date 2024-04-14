@@ -67,7 +67,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
             {
                 return this.JsonLocalStorageService.LoadFromLocalStroage<BookContentModel>(FilePath);
             }
-            return new BookContentModel();
+            return null;
         }
 
         public bool SaveBookContentModelToLocalStrorage(BookContentModel BookContentModel)

@@ -9,7 +9,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
     {
         List<CategoryModel> ParseCategoryModel(HtmlDocument CategoryHtmlDocument);
         List<BookModel> ParseBookModelCollection(HtmlDocument ChapterHtmlDocument);
-        BookModel ParseBookModel(HtmlDocument BookHtmlDocument, int BookID);
+        BookModel ParseBookModel(HtmlDocument BookHtmlDocument);
         PageModel ParsePageModel(HtmlDocument ChapterHtmlDocument);
     }
 
@@ -18,7 +18,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
         public CPWenKuModelParseService(ILogger<ModelParserService> Logger):base(Logger)
         {
         }
-
+        [Special("ParseCategoryModel")]
         public List<CategoryModel> ParseCategoryModel(HtmlDocument CategoryHtmlDocument)
         {
             List<CategoryModel> Result = new List<CategoryModel>();
@@ -37,13 +37,13 @@ namespace ProxyVisterAPI.Services.CPWenKu
             }
             return Result;
         }
-
+        [Special("ParseBookModelCollection")]
         public List<BookModel> ParseBookModelCollection(HtmlDocument ChapterHtmlDocument)
         {
             return new List<BookModel>();
         }
-
-        public BookModel ParseBookModel(HtmlDocument BookHtmlDocument, int BookID)
+        [Special("ParseBookModel")]
+        public BookModel ParseBookModel(HtmlDocument BookHtmlDocument)
         {
             HtmlNode BookInfo = BookHtmlDocument.DocumentNode.SelectSingleNode("//div[@class='bookinfo']");
             HtmlNode BoolTag = BookInfo.ChildNodes[1];
@@ -67,7 +67,6 @@ namespace ProxyVisterAPI.Services.CPWenKu
             
             BookModel ResultBookDetail = new BookModel
             {
-                ID = BookID,
                 CoverPath = BookHtmlDocument.DocumentNode.SelectSingleNode("//img[@class='thumbnail']").Attributes["src"].Value,
                 NoCoverPath = BookHtmlDocument.DocumentNode.SelectSingleNode("//img[@class='thumbnail']").Attributes["onerror"].Value,
                 Title = BookInfo.SelectSingleNode("//h1[@class='booktitle']").InnerText,
@@ -80,7 +79,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
             };
             return ResultBookDetail;
         }
-        
+        [Special("PageModel")]
         public PageModel ParsePageModel(HtmlDocument ChapterHtmlDocument)
         {
             HtmlNode BookReadInfo = ChapterHtmlDocument.DocumentNode.SelectSingleNode("//div[@class='book read']");
@@ -140,6 +139,11 @@ namespace ProxyVisterAPI.Services.CPWenKu
             if(NextIndex.Attributes["href"].Value == ResultPageModel.NextPageLink)
             {
                 ResultPageModel.IsEndOfBook = true;
+                ResultPageModel.NextPageLink = "";
+            }
+            else
+            {
+                ResultPageModel.NextPageLink = CPWenKuRequestDefine.DomainURL + ResultPageModel.NextPageLink;
             }
             return ResultPageModel;
         }

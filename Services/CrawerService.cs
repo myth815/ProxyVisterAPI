@@ -1,4 +1,5 @@
 ﻿using HtmlAgilityPack;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Mvc;
 using ProxyVisterAPI.Controllers;
 using ProxyVisterAPI.Models.CPWenku;
@@ -36,12 +37,21 @@ namespace ProxyVisterAPI.Services
     {
         public delegate void TaskCompletedCallback(AsyncWebFetchTask<T> result);
         public delegate ModelType ParseModel<ModelType>(HtmlDocument HTMLContent);
-        
+        public T? ResultWithType { get; set; }
         public TaskCompletedCallback TaskCallback { get; set; }
 
         public AsyncWebFetchTask(Uri UriRequest, TaskCompletedCallback TaskCallback):base(UriRequest)
         {
             this.TaskCallback = TaskCallback;
+        }
+
+        public void InvokCallback()
+        {
+            if(this.Result != null)
+            {
+                this.ResultWithType = (T)Result;
+            }
+            this.TaskCallback.Invoke(this);
         }
     }
 
@@ -54,7 +64,6 @@ namespace ProxyVisterAPI.Services
         protected WebProxy? WebProxySettings;
         protected int VistIntervals;
         protected uint MaxConnectPool;
-        protected uint NumberOfThreads;
         protected uint MaxTryCount;
         protected uint TimeOut;
 
@@ -68,18 +77,22 @@ namespace ProxyVisterAPI.Services
             this.Configuration = Configuration;
             this.VistIntervals = this.Configuration.GetValue<int>("VistIntervals");
             this.MaxConnectPool = this.Configuration.GetValue<uint>("MaxConnectPool");
-            this.NumberOfThreads = this.Configuration.GetValue<uint>("NumberOfThreads");
             this.MaxTryCount = this.Configuration.GetValue<uint>("MaxTryCount");
             this.TimeOut = this.Configuration.GetValue<uint>("TimeOut");
             this.SetupProxy();
             this.CrawerTaskList = new ConcurrentQueue<AsyncWebFetchTaskBase>();
             this.HttpClientPool = new ConcurrentStack<HttpClient>();
+            for(int i = 0;i<MaxConnectPool;i++)
+            {
+                this.HttpClientPool.Push(this.GetHttpClientWithProxy());
+            }
         }
 
-        public void AsyncGetWebContent<T>(Uri UriRequest, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
+        public void AsyncFetchWebContent<T>(Uri UriRequest, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
         {
             AsyncWebFetchTask<T> Task = new AsyncWebFetchTask<T>(UriRequest, FinishCallback);
             this.CrawerTaskList.Enqueue(Task);
+            this.Logger.LogInformation($"Add Async Task {UriRequest.OriginalString}");
             this.FlushTaskQueue();
         }
 
@@ -117,47 +130,110 @@ namespace ProxyVisterAPI.Services
 
         protected void FlushTaskQueue()
         {
-            if (this.CrawerTaskList.Count > 0)
+            if (this.HttpClientPool.TryPop(out HttpClient? Client))
             {
-                for (int i = 0; i < this.NumberOfThreads; i++)
+                if(!this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task))
                 {
-                    if (this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task) && this.HttpClientPool.TryPop(out HttpClient? Client))
+                    this.HttpClientPool.Push(Client);
+                    return;
+                }
+                Task<HttpResponseMessage> TaskResponse = Client.GetAsync(Task.URL);
+                TaskResponse.ContinueWith(TaskResponse =>
+                {
+                    HttpResponseMessage Response = TaskResponse.Result;
+                    switch (Response.StatusCode)
                     {
-                        Task<HttpResponseMessage> TaskResponse = Client.GetAsync(Task.URL);
-                        TaskResponse.ContinueWith(TaskResponse =>
-                        {
-                            HttpResponseMessage Response = TaskResponse.Result;
-                            switch (Response.StatusCode)
+                        case HttpStatusCode.OK:
                             {
-                                case HttpStatusCode.OK:
-                                    {
-                                        HtmlDocument WebContent = new HtmlDocument();
-                                        Task<string> TaskResponseContent = Response.Content.ReadAsStringAsync();
-                                        TaskResponseContent.ContinueWith(TaskResponseContent =>
-                                        {
-                                            WebContent.LoadHtml(TaskResponseContent.Result);
-                                            Task.Result = WebContent;
-                                            Task.StringResult = TaskResponseContent.Result;
-                                            Task.HtmlResult = WebContent;
-                                            Type ReturnType = typeof(Task).GetGenericTypeDefinition();
-                                            this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
-                                        },
-                                        TaskContinuationOptions.OnlyOnRanToCompletion);
-                                        break;
-                                    }
-                                default:
+                                HtmlDocument WebContent = new HtmlDocument();
+                                Task<string> TaskResponseContent = Response.Content.ReadAsStringAsync();
+                                TaskResponseContent.ContinueWith(TaskResponseContent =>
+                                {
+                                    WebContent.LoadHtml(TaskResponseContent.Result);
+                                    if(WebContent.DocumentNode.InnerText.Length == 0)
                                     {
                                         Task.RryCount++;
                                         if (Task.RryCount < MaxTryCount)
                                         {
+                                            this.Logger.LogError($"ParseModel Fail with URL({Task.URL}), Retry");
+                                            Thread.Sleep(this.VistIntervals);
                                             this.CrawerTaskList.Enqueue(Task);
+                                            this.HttpClientPool.Push(this.GetHttpClientWithProxy());
+                                            this.FlushTaskQueue();
+                                            return;
                                         }
-                                        break;
+                                        else
+                                        {
+                                            new Exception("Is Max Error Count");
+                                        }
                                     }
+                                    Task.Result = WebContent;
+                                    Task.StringResult = TaskResponseContent.Result;
+                                    Task.HtmlResult = WebContent;
+                                    Type SourceType = Task.GetType();
+                                    Type[] ReturnTypes = SourceType.GetGenericArguments();
+                                    if(ReturnTypes.Length == 1)
+                                    {
+                                        Type ReturnTypeOfModel = ReturnTypes[0];
+                                        Type ModelParserServiceType = typeof(ModelParserService);
+                                        MethodInfo? ParseModelMethod = ModelParserServiceType.GetMethod("ParseModel");
+                                        if(ParseModelMethod == null)
+                                        {
+                                            throw new Exception();
+                                        }
+                                        else
+                                        {
+                                            MethodInfo Generic = ParseModelMethod.MakeGenericMethod(ReturnTypeOfModel);
+                                            Task.Result = Generic.Invoke(this.ModelParserService, new object[] { WebContent });
+                                        }
+                                        
+                                        Type TaskType = Task.GetType();
+                                        MethodInfo? TaskCallbackFunctionMethod = TaskType.GetMethod("InvokCallback");
+                                        if (TaskCallbackFunctionMethod == null)
+                                        {
+                                            throw new Exception();
+                                        }
+                                        else
+                                        {
+                                            TaskCallbackFunctionMethod.Invoke(Task, new object[] {});
+                                        }
+                                    }
+                                    this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
+                                    this.HttpClientPool.Push(Client);
+                                    this.FlushTaskQueue();
+                                },
+                                TaskContinuationOptions.OnlyOnRanToCompletion);
+                                break;
                             }
-                        },
-                        TaskContinuationOptions.OnlyOnRanToCompletion);
+                        case HttpStatusCode.Forbidden :
+                            {
+                                Thread.Sleep(this.VistIntervals);
+                                Task.RryCount++;
+                                if (Task.RryCount < MaxTryCount)
+                                {
+                                    this.CrawerTaskList.Enqueue(Task);
+                                }
+                                this.HttpClientPool.Push(this.GetHttpClientWithProxy());
+                                return;
+                            }
+                        default:
+                            {
+                                Task.RryCount++;
+                                if (Task.RryCount < MaxTryCount)
+                                {
+                                    this.CrawerTaskList.Enqueue(Task);
+                                }
+                                break;
+                            }
                     }
+                },
+                TaskContinuationOptions.OnlyOnRanToCompletion);
+            }
+            else
+            {
+                if(Client != null)
+                {
+                    this.HttpClientPool.Push(Client);
                 }
             }
         }
@@ -191,7 +267,7 @@ namespace ProxyVisterAPI.Services
                     this.Logger.LogError("ProxyPort Proxy Configure Is 0, Please check.)");
                 }
                 string ProxyUri = $"{ProxyProtol}://{ProxyHost}:{ProxyPort}";
-                this.WebProxySettings = new WebProxy($"{ProxyProtol}://{ProxyHost}:{ProxyPort}");
+                this.WebProxySettings = new WebProxy(ProxyUri);
                 string? ProxyUserName = ProxySection.GetValue<string>("UserName");
                 string? ProxyPassword = ProxySection.GetValue<string>("Password");
                 if (!string.IsNullOrEmpty(ProxyUserName))
@@ -247,11 +323,11 @@ namespace ProxyVisterAPI.Services
         {
             Uri UriRequest = new Uri(RequestURL);
             DomainCrawerManager? Manager = GetDomainCrawerManager(UriRequest);
-            if (Manager != null)
+            if (Manager == null)
             {
-                Manager.AsyncGetWebContent(UriRequest, FinishCallback);
+                throw new Exception("Can't Get DomainName From RequestURL( " + RequestURL + " )");
             }
-            throw new Exception("Can't Get DomainName From RequestURL( " + RequestURL + " )");
+            Manager.AsyncFetchWebContent(UriRequest, FinishCallback);
         }
     }
 }

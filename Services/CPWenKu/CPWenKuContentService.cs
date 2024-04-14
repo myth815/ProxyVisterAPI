@@ -1,18 +1,29 @@
 ﻿using HtmlAgilityPack;
 using Newtonsoft.Json;
 using ProxyVisterAPI.Models.CPWenku;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Net;
+using System.Text.RegularExpressions;
 
 namespace ProxyVisterAPI.Services.CPWenKu
 {
     public class CPWenKuRequestDefine
     {
-        public const string CategoriesURL = "https://www.cpwenku.net/all.html";
-        public const string GetBooksWithauthorURL = "https://www.cpwenku.net/modules/article/authorarticle.php?author=";
-        public const string GetBookWithIDURL = "https://www.cpwenku.net/go/";
-        public const string GetPageWithChapterURL = "https://www.cpwenku.net/go/";
+        public const string DomainURL = "https://www.cpwenku.net";
+        public const string CategoriesURL = $"{DomainURL}/all.html";
+        public const string GetBooksWithauthorURL = $"{DomainURL}/modules/article/authorarticle.php?author=";
+        public const string GetBookWithIDURL = $"{DomainURL}/go/";
+    }
+
+    public class ResultOfBookContentModel
+    {
+        public bool SuccessGetModel { get; set; }
+        public float CraweProgress { get; set; }
+        public BookModel? BookModel { get; set; }
+        public BookContentModel? BookContentModel { get; set; }
     }
 
     public interface ICPWenKuModelService
@@ -21,7 +32,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
         List<BookModel>? GetBookListFromCategory(string Category, bool Force = false);
         List<BookModel>? GetBookListFromAuthor(string Author);
         BookModel? GetBookModel(int BookID);
-        BookContentModel? GetBookContentModel(int BookID);
+        ResultOfBookContentModel GetBookContentModel(int BookID);
         bool IsBookModelEqual(BookModel Left, BookModel Right);
         bool IsBookModelUpdateTimeEqual(BookModel Left, BookModel Right, bool CheckUpdateTime);
         bool IsBookModelCollectionEqual(List<BookModel> Left, List<BookModel> Right);
@@ -35,11 +46,10 @@ namespace ProxyVisterAPI.Services.CPWenKu
         private ICPWenKuModelParseService ModelParseService;
         private ICPWenKuLocalStrorageService LocalStrorageService;
 
-        private readonly string StorageDirectory = Directory.GetCurrentDirectory();
-        private ConcurrentQueue<BookModel> BookCrawerList = new ConcurrentQueue<BookModel>();
-
-        private int CurrentTaskBookID;
-        private Task? CurrentTask;
+        private readonly Mutex BookModelCraweLocker = new Mutex();
+        private BookContentModel? CurrentCraweBookContent;
+        private ConcurrentQueue<BookModel> CraweBookContentTaskList;
+        private ConcurrentDictionary<string, PageModel?> PageModelAsyncFetchResult;
 
         public CPWenKuModelService(ILogger<CPWenKuModelService> ServiceLogger, ICrawerService CrawerService, ICPWenKuModelParseService ModelParseService, ICPWenKuLocalStrorageService localStrorageService)
         {
@@ -47,6 +57,9 @@ namespace ProxyVisterAPI.Services.CPWenKu
             this.CrawerService = CrawerService;
             this.ModelParseService = ModelParseService;
             this.LocalStrorageService = localStrorageService;
+
+            this.CraweBookContentTaskList = new ConcurrentQueue<BookModel>();
+            this.PageModelAsyncFetchResult = new ConcurrentDictionary<string, PageModel?>();
         }
 
         public List<CategoryModel>? GetCategories(bool Force = false)
@@ -101,167 +114,143 @@ namespace ProxyVisterAPI.Services.CPWenKu
             }
             if(WebContent != null)
             {
-                BookModel ResultBookModel = this.ModelParseService.ParseBookModel(WebContent, BookID);
+                BookModel ResultBookModel = this.ModelParseService.ParseBookModel(WebContent);
+                ResultBookModel.ID = BookID;
                 this.LocalStrorageService.SaveBookModelToLocalStrorage(ResultBookModel);
                 return ResultBookModel;
             }
             return null;
         }
 
-        public BookContentModel? GetBookContentModel(int BookID)
+        public ResultOfBookContentModel GetBookContentModel(int BookID)
         {
             BookModel? DestBookModel = this.GetBookModel(BookID);
+            ResultOfBookContentModel Result = new ResultOfBookContentModel();
+            Result.BookModel = DestBookModel;
             BookContentModel? LocalResult = this.LocalStrorageService.LoadBookContentModelFromLocalStrorage(BookID);
-            if(LocalResult != null && LocalResult.BookModel != null && DestBookModel != null)
+            if (LocalResult != null && LocalResult.BookModel != null && DestBookModel != null)
             {
                 if (LocalResult != null)
                 {
                     if (DestBookModel.UpdateTime == LocalResult.BookModel.UpdateTime)
                     {
-                        return LocalResult;
+                        Result.SuccessGetModel = true;
+                        Result.BookContentModel = LocalResult;
+                        Result.CraweProgress = 1.0f;
+                        return Result;
                     }
                 }
             }
-            BookContentModel ResultBookContentModel = new BookContentModel();
-            string BookModelRequestURL = $"{CPWenKuRequestDefine.GetBookWithIDURL}{BookID}/";
-            if (DestBookModel != null && DestBookModel.ChapterList != null)
+            if(DestBookModel != null)
             {
-                Dictionary<string, PageModel> CarwWebList = new Dictionary<string, PageModel>();
-                foreach (string PageLink in DestBookModel.ChapterList)
+                this.BookModelCraweLocker.WaitOne();
+                Result.SuccessGetModel = false;
+                if (CurrentCraweBookContent != null && CurrentCraweBookContent.BookModel != null && CurrentCraweBookContent.BookModel.ID == BookID)
+                {
+                    //TODO 正在抓取中,获取进度
+                    Result.CraweProgress = 1.0f;
+                }
+                else
+                {
+                    foreach (BookModel BookWaitForCrawe in this.CraweBookContentTaskList)
+                    {
+                        if (BookWaitForCrawe.ID == BookID)
+                        {
+                            Result.CraweProgress = 0.0f;
+                            return Result;
+                        }
+                    }
+                    this.CraweBookContentTaskList.Enqueue(DestBookModel);
+                    this.FlushBookToCrawerList();
+                }
+                this.BookModelCraweLocker.ReleaseMutex();
+                return Result;
+            }
+            return Result;
+        }
+
+        public void FlushBookToCrawerList()
+        {
+            if (this.CurrentCraweBookContent == null && this.CraweBookContentTaskList.TryDequeue(out BookModel? BookModel))
+            {
+                this.CraweBookContent(BookModel);
+            }
+        }
+
+        public void CraweBookContent(BookModel Book)
+        {
+            this.CurrentCraweBookContent = new BookContentModel();
+            this.PageModelAsyncFetchResult.Clear();
+            this.CurrentCraweBookContent.BookModel = Book;
+            string BookModelRequestURL = $"{CPWenKuRequestDefine.GetBookWithIDURL}{Book.ID}/";
+
+            if (Book.ChapterList != null)
+            {
+                foreach (string PageLink in Book.ChapterList)
                 {
                     string RequestPageURL = $"{BookModelRequestURL}{PageLink}";
-                    PageModel? BookPageModel = this.CrawerService.FetchWebContent<PageModel>(RequestPageURL);
-                    if(BookPageModel != null)
+                    if(this.PageModelAsyncFetchResult.TryAdd(RequestPageURL, null))
                     {
-                        CarwWebList.Add(RequestPageURL, BookPageModel);
-                        if(!string.IsNullOrEmpty(BookPageModel.NextPageLink) && BookPageModel.NextPageLink != BookModelRequestURL && !CarwWebList.ContainsKey(BookPageModel.NextPageLink))
-                        {
-                            CarwWebList.Add(PageLink, BookPageModel);
-                        }
+                        this.CrawerService.AsyncFetchWebContent<PageModel>(RequestPageURL, this.OnLoadBookPageModelCompleted);
                     }
                 }
             }
-            
-            this.LocalStrorageService.SaveBookContentModelToLocalStrorage(ResultBookContentModel);
-            return ResultBookContentModel;
         }
 
-        public bool TryGetBookOrAddBookToCrawerQueue(BookModel book, bool Force = false)
+        public void OnLoadBookPageModelCompleted(AsyncWebFetchTask<PageModel> Result)
         {
-            if (CurrentTask != null && CurrentTaskBookID == book.ID)
+            if (this.PageModelAsyncFetchResult.TryUpdate(Result.URL.OriginalString, Result.ResultWithType, null) && Result.ResultWithType != null && !string.IsNullOrEmpty(Result.ResultWithType.NextPageLink))
             {
-                return false;
-            }
-            bool FoundSameBook = false;
-            foreach (BookModel BookModelInstance in this.BookCrawerList)
-            {
-                if (BookModelInstance.ID == book.ID)
+                if(PageModelAsyncFetchResult.TryAdd(Result.ResultWithType.NextPageLink, null))
                 {
-                    FoundSameBook = true;
-                    break;
+                    this.CrawerService.AsyncFetchWebContent<PageModel>(Result.ResultWithType.NextPageLink, this.OnLoadBookPageModelCompleted);
+                    return;
                 }
             }
-            if (!FoundSameBook)
+            //检查是否所有任务全部完成了
+            if (!this.PageModelAsyncFetchResult.Values.Contains(null))
             {
-                this.BookCrawerList.Enqueue(book);
-                this.FlushBookToCrawerList();
-                return true;
-            }
-            else
-            {
-                return false;
+                List<PageModel>? ListPageResult = this.CheckAllBookContentPageTaskCompleted();
+                if(ListPageResult != null)
+                {
+                    this.OnBookModelCarweCompleted(ListPageResult);
+                }
             }
         }
 
-        private async Task ProcessBookModel(BookModel BookModelInstance)
+        public List<PageModel>? CheckAllBookContentPageTaskCompleted()
         {
-            // 实现你的异步逻辑
-            await Task.Delay(TimeSpan.FromSeconds(1)); // 假设的异步操作
-            List<string> Result = new List<string>();
-
-            if(BookModelInstance.ChapterList != null)
+            //检查是否都能顺序到最终
+            if(this.CurrentCraweBookContent != null && this.CurrentCraweBookContent.BookModel != null && this.CurrentCraweBookContent.BookModel.ChapterList != null && this.CurrentCraweBookContent.BookModel.ChapterList.Count != 0)
             {
-                for (int i = 0; i < BookModelInstance.ChapterList.Count; i++)
+                List<PageModel> Result = new List<PageModel>();
+                string FirstPageURL = this.CurrentCraweBookContent.BookModel.ChapterList[0];
+                string FullFirstPageURL = $"{CPWenKuRequestDefine.GetBookWithIDURL}{this.CurrentCraweBookContent.BookModel.ID}/{FirstPageURL}";
+                if(this.PageModelAsyncFetchResult.TryGetValue(FullFirstPageURL, out PageModel? FirstPage))
                 {
-                    string RequestURL = $"https://www.cpwenku.net/go/{BookModelInstance.ID}/{BookModelInstance.ChapterList[i]}";
-                    HtmlDocument? WebContent = this.CrawerService.FetchWebContent< HtmlDocument>(RequestURL);
-                    if (WebContent != null)
+                    PageModel? PageModel = FirstPage;
+                    while(PageModel != null)
                     {
-                        HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
-                        if(ContentNode != null)
+                        Result.Add(PageModel);
+                        if(PageModel.IsEndOfBook)
                         {
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                            Result.Add(ContentNode.InnerText);
-                            this.Logger.LogInformation($"{BookModelInstance.ID} Processed {i + 1} / {BookModelInstance.ChapterList.Count}");
+                            break;
+                        }
+                        string? NextPageLink = PageModel.NextPageLink;
+                        if (!string.IsNullOrEmpty(NextPageLink) && !this.PageModelAsyncFetchResult.TryGetValue(NextPageLink, out PageModel))
+                        {
+                            return null;
                         }
                     }
+                    return Result;
                 }
-                BookModelInstance.ChapterList = Result;
-                string SerializedBookModel = JsonConvert.SerializeObject(BookModelInstance);
-                string LocalBookPath = this.StorageDirectory + $"/cpwenku/Books/{BookModelInstance.ID}.json";
-                System.IO.File.WriteAllText(LocalBookPath, SerializedBookModel);
-                this.Logger.LogInformation($"Finish Processed {BookModelInstance.ID}");
             }
+            return null;
         }
 
-        private void FlushBookToCrawerList()
+        public void OnBookModelCarweCompleted(List<PageModel> ListPageResult)
         {
-            if (!BookCrawerList.IsEmpty)
-            {
-                BookModel? firstNode;
-                if (BookCrawerList.TryDequeue(out firstNode) && firstNode != null)
-                {
-                    this.CurrentTaskBookID = firstNode.ID;
-                    // 在这里处理 firstNode 对象
-                    this.CurrentTask = Task.Run(() => ProcessBookDetail(firstNode)).ContinueWith(task =>
-                    {
-                        if (task.Status == TaskStatus.RanToCompletion)
-                        {
-                            this.CurrentTask = null;
-                            this.CurrentTaskBookID = 0;
-                            FlushBookToCrawerList();
-                        }
-                    })
-                    ;
-                }
-            }
-        }
-
-        private async Task ProcessBookDetail(BookModel BookDetailInstance)
-        {
-            // 实现你的异步逻辑
-            await Task.Delay(TimeSpan.FromSeconds(1)); // 假设的异步操作
-            List<string> Result = new List<string>();
-
-            if(BookDetailInstance.ChapterList != null)
-            {
-                for (int i = 0; i < BookDetailInstance.ChapterList.Count; i++)
-                {
-                    string RequestURL = $"https://www.cpwenku.net/go/{BookDetailInstance.ID}/{BookDetailInstance.ChapterList[i]}";
-                    HtmlDocument? WebContent = this.CrawerService.FetchWebContent<HtmlDocument>(RequestURL);
-                    if(WebContent != null)
-                    {
-                        HtmlNode ContentNode = WebContent.DocumentNode.SelectSingleNode("//div[@class='readcontent']");
-                        if (ContentNode != null)
-                        {
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[0]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                            ContentNode.RemoveChild(ContentNode.ChildNodes[ContentNode.ChildNodes.Count - 1]);
-                            Result.Add(ContentNode.InnerText);
-                            this.Logger.LogInformation($"{BookDetailInstance.ID} Processed {i + 1} / {BookDetailInstance.ChapterList.Count}");
-                        }
-                    }
-                }
-                BookDetailInstance.ChapterList = Result;
-                string SerializedBookDetail = JsonConvert.SerializeObject(BookDetailInstance);
-                string LocalBookPath = this.StorageDirectory + $"/cpwenku/Books/{BookDetailInstance.ID}.json";
-                System.IO.File.WriteAllText(LocalBookPath, SerializedBookDetail);
-                this.Logger.LogInformation($"Finish Processed {BookDetailInstance.ID}");
-            }
+            this.Logger.LogInformation("CraweBookModelFinished");
         }
 
         public bool IsBookModelEqual(BookModel Left, BookModel Right)
