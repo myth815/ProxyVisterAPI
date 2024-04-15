@@ -99,7 +99,19 @@ namespace ProxyVisterAPI.Services.CPWenKu
                 {
                     case "#text":
                         {
-                            ContentLines.Add(PageContent.ChildNodes[i].InnerText);
+                            string LineContent = PageContent.ChildNodes[i].InnerText;
+                            if(LineContent.StartsWith('\n'))
+                            {
+                                LineContent = LineContent.Replace("\n", "");
+                            }
+                            while(LineContent.StartsWith("&nbsp;"))
+                            {
+                                LineContent = LineContent.Replace("&nbsp;", "");
+                            }
+                            if(!string.IsNullOrWhiteSpace(LineContent))
+                            {
+                                ContentLines.Add(LineContent);
+                            }
                             break;
                         }
                     case "div":

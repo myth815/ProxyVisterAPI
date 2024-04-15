@@ -62,6 +62,7 @@ namespace ProxyVisterAPI.Services
         IModelParserService ModelParserService;
         protected string DomainName;
         protected WebProxy? WebProxySettings;
+        protected bool EnableProxy;
         protected int VistIntervals;
         protected uint MaxConnectPool;
         protected uint MaxTryCount;
@@ -88,6 +89,21 @@ namespace ProxyVisterAPI.Services
             }
         }
 
+        public void CheckVistIntervalsTime(bool Success)
+        {
+            if(Success && this.VistIntervals != 0)
+            {
+                this.VistIntervals = 0;
+                this.Logger.LogInformation($"Change Vist Interval Time ( {this.VistIntervals} )");
+            }
+            else
+            {
+                this.VistIntervals += 10000;
+                this.Logger.LogInformation($"Change Vist Interval Time ( {this.VistIntervals} ) And Sleeping!");
+                Thread.Sleep(this.VistIntervals);
+            }
+        }
+
         public void AsyncFetchWebContent<T>(Uri UriRequest, AsyncWebFetchTask<T>.TaskCompletedCallback FinishCallback)
         {
             AsyncWebFetchTask<T> Task = new AsyncWebFetchTask<T>(UriRequest, FinishCallback);
@@ -96,12 +112,45 @@ namespace ProxyVisterAPI.Services
             this.FlushTaskQueue();
         }
 
+        private static readonly List<string> HeadList = [
+            "Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.153 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:30.0) Gecko/20100101 Firefox/30.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2) AppleWebKit/537.75.14 (KHTML, like Gecko) Version/7.0.3 Safari/537.75.14",
+            "Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Win64; x64; Trident/6.0)",
+            "Mozilla/5.0 (Windows; U; Windows NT 5.1; it; rv:1.8.1.11) Gecko/20071127 Firefox/2.0.0.11",
+            "Opera/9.25 (Windows NT 5.1; U; en)",
+            "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727)",
+            "Mozilla/5.0 (compatible; Konqueror/3.5; Linux) KHTML/3.5.5 (like Gecko) (Kubuntu)",
+            "Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.8.0.12) Gecko/20070731 Ubuntu/dapper-security Firefox/1.5.0.12",
+            "Lynx/2.8.5rel.1 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/1.2.9",
+            "Mozilla/5.0 (X11; Linux i686) AppleWebKit/535.7 (KHTML, like Gecko) Ubuntu/11.04 Chromium/16.0.912.77 Chrome/16.0.912.77 Safari/535.7",
+            "Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:10.0) Gecko/20100101 Firefox/10.0"
+        ];
+
+        public HttpRequestMessage UpdateUriRequest(Uri UriRequest)
+        {
+            HttpRequestMessage Request = new HttpRequestMessage(HttpMethod.Get, UriRequest.OriginalString);
+            Request.Headers.Add("User-Agent", HeadList[new Random().Next(HeadList.Count)]);
+            Request.Headers.Add("Referer", $"https://{this.DomainName}/");
+            Request.Headers.Add("Host", this.DomainName);
+
+            Request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+            {
+                NoCache = true,
+                NoStore = true
+            };
+            Request.Headers.Pragma.Add(new System.Net.Http.Headers.NameValueHeaderValue("no-cache"));
+            return Request;
+        }
+
         public T? FetchWebContent<T>(Uri UriRequest)
         {
             while (true)
             {
                 HttpClient WebClient = GetHttpClientWithProxy();
-                HttpResponseMessage Response = WebClient.GetAsync(UriRequest).GetAwaiter().GetResult();
+                HttpRequestMessage Request = this.UpdateUriRequest(UriRequest);
+                HttpResponseMessage Response = WebClient.SendAsync(Request).GetAwaiter().GetResult();
                 switch (Response.StatusCode)
                 {
                     case HttpStatusCode.OK:
@@ -109,19 +158,30 @@ namespace ProxyVisterAPI.Services
                             HtmlDocument WebContent = new HtmlDocument();
                             string ResponseContent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                             WebContent.LoadHtml(ResponseContent);
-                            if(typeof(T) == typeof(HtmlDocument))
+                            if(WebContent.DocumentNode.InnerText.Length != 0)
                             {
-                                T Result = (T)Convert.ChangeType(WebContent, typeof(T));
-                                return Result;
+                                this.CheckVistIntervalsTime(true);
+                                if (typeof(T) == typeof(HtmlDocument))
+                                {
+                                    T Result = (T)Convert.ChangeType(WebContent, typeof(T));
+                                    return Result;
+                                }
+                                else
+                                {
+                                    return this.ModelParserService.ParseModel<T>(WebContent);
+                                }
                             }
                             else
                             {
-                                return this.ModelParserService.ParseModel<T>(WebContent);
+                                WebClient.Dispose();
+                                this.CheckVistIntervalsTime(false);
+                                continue;
                             }
                         }
                     default:
                         {
-                            Thread.Sleep(VistIntervals);
+                            WebClient.Dispose();
+                            this.CheckVistIntervalsTime(false);
                             continue;
                         }
                 }
@@ -137,38 +197,32 @@ namespace ProxyVisterAPI.Services
                     this.HttpClientPool.Push(Client);
                     return;
                 }
-                Task<HttpResponseMessage> TaskResponse = Client.GetAsync(Task.URL);
+                this.Logger.LogDebug(DomainName + " Start Task " + Task.URL.OriginalString);
+                HttpRequestMessage Request = this.UpdateUriRequest(Task.URL);
+                Task<HttpResponseMessage> TaskResponse = Client.SendAsync(Request);
                 TaskResponse.ContinueWith(TaskResponse =>
                 {
+                    this.Logger.LogDebug(DomainName + " End Task " + Task.URL.OriginalString);
                     HttpResponseMessage Response = TaskResponse.Result;
-                    switch (Response.StatusCode)
+                    HttpStatusCode ResponseStateCode = Response.StatusCode;
+                    switch (ResponseStateCode)
                     {
                         case HttpStatusCode.OK:
                             {
                                 HtmlDocument WebContent = new HtmlDocument();
-                                Task<string> TaskResponseContent = Response.Content.ReadAsStringAsync();
-                                TaskResponseContent.ContinueWith(TaskResponseContent =>
+                                string WebStringCOntent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                                WebContent.LoadHtml(WebStringCOntent);
+                                if(WebContent.DocumentNode.InnerText.Length == 0)
                                 {
-                                    WebContent.LoadHtml(TaskResponseContent.Result);
-                                    if(WebContent.DocumentNode.InnerText.Length == 0)
-                                    {
-                                        Task.RryCount++;
-                                        if (Task.RryCount < MaxTryCount)
-                                        {
-                                            this.Logger.LogError($"ParseModel Fail with URL({Task.URL}), Retry");
-                                            Thread.Sleep(this.VistIntervals);
-                                            this.CrawerTaskList.Enqueue(Task);
-                                            this.HttpClientPool.Push(this.GetHttpClientWithProxy());
-                                            this.FlushTaskQueue();
-                                            return;
-                                        }
-                                        else
-                                        {
-                                            new Exception("Is Max Error Count");
-                                        }
-                                    }
+                                    Client.Dispose();
+                                    OnTaskFetchFail(Task);
+                                    break;
+                                }
+                                else
+                                {
+                                    this.CheckVistIntervalsTime(true);
                                     Task.Result = WebContent;
-                                    Task.StringResult = TaskResponseContent.Result;
+                                    Task.StringResult = WebStringCOntent;
                                     Task.HtmlResult = WebContent;
                                     Type SourceType = Task.GetType();
                                     Type[] ReturnTypes = SourceType.GetGenericArguments();
@@ -200,30 +254,20 @@ namespace ProxyVisterAPI.Services
                                     }
                                     this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
                                     this.HttpClientPool.Push(Client);
-                                    Thread.Sleep(this.VistIntervals);
                                     this.FlushTaskQueue();
-                                },
-                                TaskContinuationOptions.OnlyOnRanToCompletion);
-                                break;
-                            }
-                        case HttpStatusCode.Forbidden :
-                            {
-                                Thread.Sleep(this.VistIntervals);
-                                Task.RryCount++;
-                                if (Task.RryCount < MaxTryCount)
-                                {
-                                    this.CrawerTaskList.Enqueue(Task);
+                                    break;
                                 }
-                                this.HttpClientPool.Push(this.GetHttpClientWithProxy());
-                                return;
+                            }
+                        case HttpStatusCode.Forbidden:
+                            {
+                                Client.Dispose();
+                                this.OnTaskFetchFail(Task);
+                                break;
                             }
                         default:
                             {
-                                Task.RryCount++;
-                                if (Task.RryCount < MaxTryCount)
-                                {
-                                    this.CrawerTaskList.Enqueue(Task);
-                                }
+                                Client.Dispose();
+                                this.OnTaskFetchFail(Task);
                                 break;
                             }
                     }
@@ -239,12 +283,31 @@ namespace ProxyVisterAPI.Services
             }
         }
 
+        protected void OnTaskFetchFail(AsyncWebFetchTaskBase Task)
+        {
+            Task.RryCount++;
+            if (Task.RryCount < MaxTryCount)
+            {
+                this.Logger.LogDebug($"ParseModel Fail with URL({Task.URL}), Retry");
+                this.CheckVistIntervalsTime(false);
+                this.CrawerTaskList.Enqueue(Task);
+                this.HttpClientPool.Push(this.GetHttpClientWithProxy());
+                this.FlushTaskQueue();
+                return;
+            }
+            else
+            {
+                new Exception("Is Max Error Count");
+            }
+        }
+
         protected HttpClient GetHttpClientWithProxy()
         {
             HttpClientHandler httpClientHandler = new HttpClientHandler
             {
                 Proxy = this.WebProxySettings,
-                UseProxy = this.WebProxySettings != null,
+                UseProxy = this.EnableProxy,
+                UseCookies = false,
             };
 
             // 注意：直接实例化HttpClient可能不是最佳实践，具体情况具体分析
@@ -275,6 +338,7 @@ namespace ProxyVisterAPI.Services
                 {
                     this.WebProxySettings.Credentials = new NetworkCredential(ProxyUserName, ProxyPassword);
                 }
+                this.EnableProxy = ProxySection.GetValue<bool>("Enable");
             }
         }
     }

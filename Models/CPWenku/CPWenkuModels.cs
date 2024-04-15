@@ -34,6 +34,7 @@ namespace ProxyVisterAPI.Models.CPWenku
     {
         public BookModel? BookModel { get; set; }
         public List<PageModel>? PageModels { get; set; }
+        public List<string>? ContentLines { get; set; }
     }
 
     public class CategoryModel : ModelBase

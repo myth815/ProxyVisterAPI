@@ -79,6 +79,6 @@ public class BookContentController : ControllerBase
         {
             return Ok(Resutl.BookContentModel);
         }
-        return Ok($"In Crawe With Process {Resutl.CraweProgress}");
+        return Ok($"In Crawe With Process {Resutl.CraweFinishedTasks} / {Resutl.CraweTotalTasks}");
     }
 }
