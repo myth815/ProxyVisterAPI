@@ -1,6 +1,7 @@
 ﻿using HtmlAgilityPack;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using ProxyVisterAPI.Controllers;
 using ProxyVisterAPI.Models.CPWenku;
 using ProxyVisterAPI.Services.CPWenKu;
@@ -61,8 +62,7 @@ namespace ProxyVisterAPI.Services
         protected IConfigurationSection Configuration;
         IModelParserService ModelParserService;
         protected string DomainName;
-        protected WebProxy? WebProxySettings;
-        protected bool EnableProxy;
+        protected string ProxyPoolUrl;
         protected int VistIntervals;
         protected uint MaxConnectPool;
         protected uint MaxTryCount;
@@ -80,10 +80,11 @@ namespace ProxyVisterAPI.Services
             this.MaxConnectPool = this.Configuration.GetValue<uint>("MaxConnectPool");
             this.MaxTryCount = this.Configuration.GetValue<uint>("MaxTryCount");
             this.TimeOut = this.Configuration.GetValue<uint>("TimeOut");
+            this.ProxyPoolUrl = this.Configuration.GetValue<string>("ProxyPool");
             this.SetupProxy();
             this.CrawerTaskList = new ConcurrentQueue<AsyncWebFetchTaskBase>();
             this.HttpClientPool = new ConcurrentStack<HttpClient>();
-            for(int i = 0;i<MaxConnectPool;i++)
+            for (int i = 0; i < MaxConnectPool; i++)
             {
                 this.HttpClientPool.Push(this.GetHttpClientWithProxy());
             }
@@ -91,7 +92,7 @@ namespace ProxyVisterAPI.Services
 
         public void CheckVistIntervalsTime(bool Success)
         {
-            if(Success && this.VistIntervals != 0)
+            if (Success && this.VistIntervals != 0)
             {
                 this.VistIntervals = 0;
                 this.Logger.LogInformation($"Change Vist Interval Time ( {this.VistIntervals} )");
@@ -158,7 +159,7 @@ namespace ProxyVisterAPI.Services
                             HtmlDocument WebContent = new HtmlDocument();
                             string ResponseContent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                             WebContent.LoadHtml(ResponseContent);
-                            if(WebContent.DocumentNode.InnerText.Length != 0)
+                            if (WebContent.DocumentNode.InnerText.Length != 0)
                             {
                                 this.CheckVistIntervalsTime(true);
                                 if (typeof(T) == typeof(HtmlDocument))
@@ -192,7 +193,7 @@ namespace ProxyVisterAPI.Services
         {
             if (this.HttpClientPool.TryPop(out HttpClient? Client))
             {
-                if(!this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task))
+                if (!this.CrawerTaskList.TryDequeue(out AsyncWebFetchTaskBase? Task))
                 {
                     this.HttpClientPool.Push(Client);
                     return;
@@ -212,7 +213,7 @@ namespace ProxyVisterAPI.Services
                                 HtmlDocument WebContent = new HtmlDocument();
                                 string WebStringCOntent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                                 WebContent.LoadHtml(WebStringCOntent);
-                                if(WebContent.DocumentNode.InnerText.Length == 0)
+                                if (WebContent.DocumentNode.InnerText.Length == 0)
                                 {
                                     Client.Dispose();
                                     OnTaskFetchFail(Task);
@@ -226,12 +227,12 @@ namespace ProxyVisterAPI.Services
                                     Task.HtmlResult = WebContent;
                                     Type SourceType = Task.GetType();
                                     Type[] ReturnTypes = SourceType.GetGenericArguments();
-                                    if(ReturnTypes.Length == 1)
+                                    if (ReturnTypes.Length == 1)
                                     {
                                         Type ReturnTypeOfModel = ReturnTypes[0];
                                         Type ModelParserServiceType = typeof(ModelParserService);
                                         MethodInfo? ParseModelMethod = ModelParserServiceType.GetMethod("ParseModel");
-                                        if(ParseModelMethod == null)
+                                        if (ParseModelMethod == null)
                                         {
                                             throw new Exception();
                                         }
@@ -240,7 +241,7 @@ namespace ProxyVisterAPI.Services
                                             MethodInfo Generic = ParseModelMethod.MakeGenericMethod(ReturnTypeOfModel);
                                             Task.Result = Generic.Invoke(this.ModelParserService, new object[] { WebContent });
                                         }
-                                        
+
                                         Type TaskType = Task.GetType();
                                         MethodInfo? TaskCallbackFunctionMethod = TaskType.GetMethod("InvokCallback");
                                         if (TaskCallbackFunctionMethod == null)
@@ -249,7 +250,7 @@ namespace ProxyVisterAPI.Services
                                         }
                                         else
                                         {
-                                            TaskCallbackFunctionMethod.Invoke(Task, new object[] {});
+                                            TaskCallbackFunctionMethod.Invoke(Task, new object[] { });
                                         }
                                     }
                                     this.Logger.LogInformation($"Task {Task.URL.OriginalString} Completed With {Response.StatusCode}");
@@ -276,7 +277,7 @@ namespace ProxyVisterAPI.Services
             }
             else
             {
-                if(Client != null)
+                if (Client != null)
                 {
                     this.HttpClientPool.Push(Client);
                 }
@@ -301,12 +302,36 @@ namespace ProxyVisterAPI.Services
             }
         }
 
+        struct ProxyInfo
+        {
+            public string anonymous;
+            public int check_count;
+            public int fail_count;
+            public bool https;
+            public bool last_status;
+            public DateTime last_time;
+            public string proxy;
+            public string region;
+            public string source;
+        }
+
         protected HttpClient GetHttpClientWithProxy()
         {
+            WebProxy? WebProxySetting = null;
+            while (WebProxySetting == null)
+            {
+                HttpResponseMessage Response = new HttpClient().GetAsync(this.ProxyPoolUrl).GetAwaiter().GetResult();
+                if (Response.StatusCode == HttpStatusCode.OK)
+                {
+                    string ResponseContent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    ProxyInfo ProxyAgentInfo = JsonConvert.DeserializeObject<ProxyInfo>(ResponseContent);
+                    WebProxySetting = new WebProxy(ProxyAgentInfo.https ? "https" : "http" + "://" + ProxyAgentInfo.proxy)
+                }
+            }
             HttpClientHandler httpClientHandler = new HttpClientHandler
             {
-                Proxy = this.WebProxySettings,
-                UseProxy = this.EnableProxy,
+                Proxy = WebProxySetting,
+                UseProxy = true,
                 UseCookies = false,
             };
 
@@ -314,33 +339,6 @@ namespace ProxyVisterAPI.Services
             return new HttpClient(httpClientHandler);
         }
 
-        protected void SetupProxy()
-        {
-            IConfigurationSection ProxySection = this.Configuration.GetSection("Proxy");
-            if (ProxySection.Exists())
-            {
-                string? ProxyProtol = ProxySection.GetValue<string>("Protol");
-                string? ProxyHost = ProxySection.GetValue<string>("Host");
-                uint? ProxyPort = ProxySection.GetValue<uint>("Port");
-                if (string.IsNullOrEmpty(ProxyProtol) || string.IsNullOrEmpty(ProxyHost))
-                {
-                    this.Logger.LogError("ProxyProtol or ProxyHost Proxy Configure Is Not Set, Please check.)");
-                }
-                if (ProxyPort == 0)
-                {
-                    this.Logger.LogError("ProxyPort Proxy Configure Is 0, Please check.)");
-                }
-                string ProxyUri = $"{ProxyProtol}://{ProxyHost}:{ProxyPort}";
-                this.WebProxySettings = new WebProxy(ProxyUri);
-                string? ProxyUserName = ProxySection.GetValue<string>("UserName");
-                string? ProxyPassword = ProxySection.GetValue<string>("Password");
-                if (!string.IsNullOrEmpty(ProxyUserName))
-                {
-                    this.WebProxySettings.Credentials = new NetworkCredential(ProxyUserName, ProxyPassword);
-                }
-                this.EnableProxy = ProxySection.GetValue<bool>("Enable");
-            }
-        }
     }
 
     public class CrawerService : ICrawerService
