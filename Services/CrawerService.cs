@@ -62,7 +62,7 @@ namespace ProxyVisterAPI.Services
         protected IConfigurationSection Configuration;
         IModelParserService ModelParserService;
         protected string DomainName;
-        protected string ProxyPoolUrl;
+        protected string? ProxyPoolUrl;
         protected int VistIntervals;
         protected uint MaxConnectPool;
         protected uint MaxTryCount;
@@ -81,7 +81,6 @@ namespace ProxyVisterAPI.Services
             this.MaxTryCount = this.Configuration.GetValue<uint>("MaxTryCount");
             this.TimeOut = this.Configuration.GetValue<uint>("TimeOut");
             this.ProxyPoolUrl = this.Configuration.GetValue<string>("ProxyPool");
-            this.SetupProxy();
             this.CrawerTaskList = new ConcurrentQueue<AsyncWebFetchTaskBase>();
             this.HttpClientPool = new ConcurrentStack<HttpClient>();
             for (int i = 0; i < MaxConnectPool; i++)
@@ -302,17 +301,17 @@ namespace ProxyVisterAPI.Services
             }
         }
 
-        struct ProxyInfo
+        class ProxyInfo
         {
-            public string anonymous;
-            public int check_count;
-            public int fail_count;
-            public bool https;
-            public bool last_status;
-            public DateTime last_time;
-            public string proxy;
-            public string region;
-            public string source;
+            public string anonymous = string.Empty;
+            public int check_count = 0;
+            public int fail_count = 0;
+            public bool https = false;
+            public bool last_status = false;
+            public DateTime last_time = new DateTime();
+            public string proxy = string.Empty;
+            public string region = string.Empty;
+            public string source = string.Empty;
         }
 
         protected HttpClient GetHttpClientWithProxy()
@@ -324,8 +323,11 @@ namespace ProxyVisterAPI.Services
                 if (Response.StatusCode == HttpStatusCode.OK)
                 {
                     string ResponseContent = Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    ProxyInfo ProxyAgentInfo = JsonConvert.DeserializeObject<ProxyInfo>(ResponseContent);
-                    WebProxySetting = new WebProxy(ProxyAgentInfo.https ? "https" : "http" + "://" + ProxyAgentInfo.proxy)
+                    ProxyInfo? ProxyAgentInfo = JsonConvert.DeserializeObject<ProxyInfo>(ResponseContent);
+                    if(ProxyAgentInfo != null)
+                    {
+                        WebProxySetting = new WebProxy(ProxyAgentInfo.https ? "https" : "http" + "://" + ProxyAgentInfo.proxy);
+                    }
                 }
             }
             HttpClientHandler httpClientHandler = new HttpClientHandler
