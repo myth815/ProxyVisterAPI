@@ -8,6 +8,7 @@ Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton<ITimedTriggerService, TimedTriggerService>();
 builder.Services.AddSingleton<ICPWenKuModelParseService, CPWenKuModelParseService>();
 builder.Services.AddSingleton<IModelParserService, CPWenKuModelParseService>();
 builder.Services.AddSingleton<ICrawlerService, CrawlerService>();

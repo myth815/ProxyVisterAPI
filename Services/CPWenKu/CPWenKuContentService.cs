@@ -223,7 +223,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
                 List<PageModel>? ListPageResult = this.CheckAllBookContentPageTaskCompleted();
                 if(ListPageResult != null)
                 {
-                    this.OnBookModelCarweCompleted(ListPageResult);
+                    this.OnBookModelCarwleCompleted(ListPageResult);
                 }
             }
         }
@@ -258,7 +258,7 @@ namespace ProxyVisterAPI.Services.CPWenKu
             return null;
         }
 
-        public void OnBookModelCarweCompleted(List<PageModel> ListPageResult)
+        public void OnBookModelCarwleCompleted(List<PageModel> ListPageResult)
         {
             List<string> FinallResult = new List<string>();
             bool NeedLinkNextPage = false;
